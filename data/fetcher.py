@@ -26,6 +26,23 @@ def fetch_news(ticker: str) -> list[dict]:
         print(f"[Fetcher] NewsAPI error: {e}")
         return []
 
+import feedparser
+
+def fetch_yahoo_rss(ticker: str) -> list[dict]:
+    try:
+        url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+        feed = feedparser.parse(url)
+        return [
+            {
+                "source": "yahoo",
+                "text": entry.title,
+                "timestamp": entry.published
+            }
+            for entry in feed.entries[:10]
+        ]
+    except Exception as e:
+        print(f"[Fetcher] Yahoo RSS error: {e}")
+        return []
 
 def fetch_reddit_mock(ticker: str) -> list[dict]:
     """Mock reddit data until API is approved."""
@@ -62,5 +79,6 @@ async def fetch_all(ticker: str) -> list[dict]:
     all_data.extend(fetch_news(ticker))
     # all_data.extend(fetch_reddit_mock(ticker))
     # all_data.extend(fetch_price(ticker))
+    all_data.extend(fetch_yahoo_rss(ticker))
     all_data.sort(key=lambda x: x["timestamp"], reverse=True)
     return all_data

@@ -4,7 +4,7 @@ from datetime import datetime
 from ai.anomaly.detector import detect, AnomalyResult
 from ai.sentiment.finbert import score_batch
 from ai.llm.groq_client import generate_brief
-from data.fetcher_simar import fetch_all
+from data.fetcher import fetch_all
 
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 60))
 BATCH_SIZE = 8
