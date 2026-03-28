@@ -1,9 +1,9 @@
 import asyncio
 from fastapi import APIRouter, Request, Query
 from backend.services.ai_service import get_latest_signal
+from backend.backtester import run_backtest
 
 router = APIRouter()
-
 
 @router.get("/latest")
 async def latest_signal(request: Request, ticker: str = Query(default="TSLA")):
@@ -15,7 +15,6 @@ async def latest_signal(request: Request, ticker: str = Query(default="TSLA")):
         signal = await get_latest_signal(ticker)
     return signal
 
-
 @router.get("/history")
 async def signal_history(request: Request, ticker: str = Query(default="TSLA")):
     ticker = ticker.upper()
@@ -23,22 +22,36 @@ async def signal_history(request: Request, ticker: str = Query(default="TSLA")):
     filtered = [s for s in history if s.get("ticker") == ticker]
     return {"signals": filtered, "count": len(filtered)}
 
-
 @router.get("/health")
 async def health():
     return {"status": "ok"}
 
+@router.get("/backtest")
+async def backtest(event: str = None, ticker: str = None):
+    """Run historical backtest. ?event=adani or ?event=cybertruck or ?event=tsla_earnings"""
+    return run_backtest(event_id=event, ticker=ticker)
+
+@router.get("/backtest/summary")
+async def backtest_summary():
+    """Returns just the accuracy stats — fast, for dashboard display"""
+    import json
+    from backend.backtester import OUTPUT_DIR
+    
+    report_path = OUTPUT_DIR / "backtest_report.json"
+    if report_path.exists():
+        with open(report_path, "r") as f:
+            report = json.load(f)
+            return report.get("summary", {})
+    return {"error": "Backtest report not found. Run python backend/backtester.py first."}
 
 @router.get("/prediction")
 async def price_prediction(ticker: str = Query(default="TSLA")):
     from ai.prediction.prophet_model import predict
     return predict(ticker.upper())
 
-
 @router.get("/watchlist")
 async def get_watchlist(request: Request):
     return {"watchlist": getattr(request.app.state, "watchlist", [])}
-
 
 @router.post("/watchlist/add")
 async def add_to_watchlist(request: Request, ticker: str = Query(...)):
@@ -51,15 +64,12 @@ async def add_to_watchlist(request: Request, ticker: str = Query(...)):
         return {"error": "Max 3 tickers allowed", "watchlist": watchlist}
     watchlist.append(ticker)
     request.app.state.watchlist = watchlist
-
     async def push_signal(signal: dict):
         t = signal.get("ticker", "UNKNOWN")
         request.app.state.latest_signals[t] = signal
         request.app.state.signal_history.append(signal)
-
     asyncio.create_task(start_background_loop(ticker, on_signal=push_signal))
     return {"watchlist": watchlist, "message": f"{ticker} added"}
-
 
 @router.post("/watchlist/remove")
 async def remove_from_watchlist(request: Request, ticker: str = Query(...)):
