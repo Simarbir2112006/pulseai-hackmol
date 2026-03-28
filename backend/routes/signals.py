@@ -1,25 +1,71 @@
-from fastapi import APIRouter, Request
+import asyncio
+from fastapi import APIRouter, Request, Query
 from backend.services.ai_service import get_latest_signal
 
 router = APIRouter()
 
+
 @router.get("/latest")
-async def latest_signal(request: Request):
-    """
-    Returns the latest TSLA signal from the background loop.
-    Falls back to on-demand analysis if loop hasn't fired yet.
-    """
-    signal = getattr(request.app.state, "latest_signal", {})
+async def latest_signal(request: Request, ticker: str = Query(default="TSLA")):
+    ticker = ticker.upper()
+    latest = getattr(request.app.state, "latest_signals", {})
+    signal = latest.get(ticker)
     if not signal:
-        signal = get_latest_signal()
+        from backend.services.ai_service import get_latest_signal
+        signal = await get_latest_signal(ticker)
     return signal
 
+
 @router.get("/history")
-async def signal_history(request: Request):
-    """Returns all signals detected since startup."""
+async def signal_history(request: Request, ticker: str = Query(default="TSLA")):
+    ticker = ticker.upper()
     history = getattr(request.app.state, "signal_history", [])
-    return {"signals": history, "count": len(history)}
+    filtered = [s for s in history if s.get("ticker") == ticker]
+    return {"signals": filtered, "count": len(filtered)}
+
 
 @router.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@router.get("/prediction")
+async def price_prediction(ticker: str = Query(default="TSLA")):
+    from ai.prediction.prophet_model import predict
+    return predict(ticker.upper())
+
+
+@router.get("/watchlist")
+async def get_watchlist(request: Request):
+    return {"watchlist": getattr(request.app.state, "watchlist", [])}
+
+
+@router.post("/watchlist/add")
+async def add_to_watchlist(request: Request, ticker: str = Query(...)):
+    from ai.pipeline import start_background_loop
+    ticker = ticker.upper()
+    watchlist = getattr(request.app.state, "watchlist", [])
+    if ticker in watchlist:
+        return {"watchlist": watchlist, "message": f"{ticker} already in watchlist"}
+    if len(watchlist) >= 3:
+        return {"error": "Max 3 tickers allowed", "watchlist": watchlist}
+    watchlist.append(ticker)
+    request.app.state.watchlist = watchlist
+
+    async def push_signal(signal: dict):
+        t = signal.get("ticker", "UNKNOWN")
+        request.app.state.latest_signals[t] = signal
+        request.app.state.signal_history.append(signal)
+
+    asyncio.create_task(start_background_loop(ticker, on_signal=push_signal))
+    return {"watchlist": watchlist, "message": f"{ticker} added"}
+
+
+@router.post("/watchlist/remove")
+async def remove_from_watchlist(request: Request, ticker: str = Query(...)):
+    ticker = ticker.upper()
+    watchlist = getattr(request.app.state, "watchlist", [])
+    if ticker in watchlist:
+        watchlist.remove(ticker)
+    request.app.state.watchlist = watchlist
+    return {"watchlist": watchlist}

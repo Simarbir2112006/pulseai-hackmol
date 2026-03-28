@@ -22,10 +22,13 @@ class AnomalyResult:
     item_count: int = 0
 
 
-def _zscore_detect(items: list[dict], scores: np.ndarray, threshold: float = 1.2) -> list[dict]:
+def _zscore_detect(items, scores, threshold=1.35):
     if scores.std() == 0:
         return []
-    zs = (scores - scores.mean()) / scores.std()
+    # apply weights before scoring
+    weights = np.array([item.get("weight", 1.0) for item in items])
+    weighted_scores = scores * weights
+    zs = (weighted_scores - weighted_scores.mean()) / weighted_scores.std()
     return [
         {**items[i], "z_score": round(float(zs[i]), 3)}
         for i in range(len(items))
@@ -33,7 +36,7 @@ def _zscore_detect(items: list[dict], scores: np.ndarray, threshold: float = 1.2
     ]
 
 
-def _isoforest_detect(items: list[dict], scores: np.ndarray, contamination: float = 0.2) -> list[dict]:
+def _isoforest_detect(items: list[dict], scores: np.ndarray, contamination: float = 0.15) -> list[dict]:
     if not SKLEARN_AVAILABLE or len(scores) < 5:
         return []
     preds = IsolationForest(
