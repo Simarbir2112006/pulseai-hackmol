@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.routes.signals import router
 from ai.pipeline import start_background_loop
+from dotenv import load_dotenv
+load_dotenv()
 
 app = FastAPI(title="PulseAI")
 

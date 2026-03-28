@@ -1,24 +1,36 @@
 import asyncio
 import os
-import json
 from datetime import datetime
 from ai.anomaly.detector import detect, AnomalyResult
 from ai.sentiment.finbert import score_batch
 from ai.llm.groq_client import generate_brief
+from data.fetcher_simar import fetch_all
 
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 60))  # seconds
-
-
-async def _fetch_data(ticker: str) -> list[str]:
-    path = os.path.join(os.path.dirname(_file_), "../../data/TSLA_pipeline_output.json")
-    with open(path) as f:
-        items = json.load(f)
-    return [item["text"] for item in items]
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 60))
+BATCH_SIZE = 8
 
 
-def _run_analysis(ticker: str, texts: list[str]) -> tuple[AnomalyResult, dict]:
-    scored = score_batch(texts)
-    result = detect(scored)
+async def _fetch_data(ticker: str) -> list[dict]:
+    return await fetch_all(ticker)
+
+
+def _run_analysis(ticker: str, items: list[dict]) -> tuple[AnomalyResult, dict]:
+    all_scored = []
+    texts = [item["text"] for item in items]
+    batches = [texts[i:i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]
+    item_batches = [items[i:i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+    
+    print(f"[Agent] {len(texts)} texts → {len(batches)} batches")
+    for i, (batch, item_batch) in enumerate(zip(batches, item_batches)):
+        print(f"[Agent] Scoring batch {i+1}/{len(batches)}...")
+        scored = score_batch(batch)
+        # merge source back in
+        for s, original in zip(scored, item_batch):
+            s["source"] = original.get("source", "unknown")
+            s["timestamp"] = original.get("timestamp", "")
+        all_scored.extend(scored)
+
+    result = detect(all_scored)
     brief = generate_brief(ticker, result) if result.detected else {}
     return result, brief
 
@@ -37,16 +49,6 @@ def _make_signal(ticker: str, result: AnomalyResult, brief: dict) -> dict:
 
 
 async def run_loop(ticker: str, on_signal=None):
-    """
-    Main agent loop. Runs forever, polling every POLL_INTERVAL seconds.
-
-    on_signal: optional async callback — backend passes its push function here
-                so signals get sent to FastAPI the moment they're detected.
-
-    Usage:
-        asyncio.run(run_loop("AAPL"))
-        asyncio.run(run_loop("AAPL", on_signal=my_push_fn))
-    """
     print(f"[Agent] Starting loop for {ticker} — polling every {POLL_INTERVAL}s")
 
     while True:
@@ -55,30 +57,25 @@ async def run_loop(ticker: str, on_signal=None):
             texts = await _fetch_data(ticker)
 
             if not texts:
-                print(f"[Agent] No data returned for {ticker}, skipping cycle.")
+                print(f"[Agent] No data returned for {ticker}, skipping.")
             else:
                 result, brief = _run_analysis(ticker, texts)
                 signal = _make_signal(ticker, result, brief)
 
                 if result.detected:
-                    print(f"[Agent] ⚡ Signal detected — {result.signal_type} for {ticker}")
+                    print(f"[Agent] ⚡ {result.signal_type} detected for {ticker}")
                     if on_signal:
                         await on_signal(signal)
                 else:
-                    print(f"[Agent] No anomaly for {ticker} (avg sentiment: {result.avg_sentiment:+.3f})")
+                    print(f"[Agent] No anomaly (avg: {result.avg_sentiment:+.3f})")
 
         except Exception as e:
-            print(f"[Agent] Error in loop cycle: {e}")
-            # don't crash the loop — log and continue
+            print(f"[Agent] Error: {e}")
 
         await asyncio.sleep(POLL_INTERVAL)
 
 
 async def run_once(ticker: str) -> dict:
-    """
-    Single run — no loop. Useful for on-demand API calls from FastAPI.
-    Returns the signal dict directly.
-    """
     texts = await _fetch_data(ticker)
     if not texts:
         return {"ticker": ticker, "detected": False, "reason": "no data"}
