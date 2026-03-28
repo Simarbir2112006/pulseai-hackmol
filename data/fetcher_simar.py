@@ -60,7 +60,7 @@ def fetch_price(ticker: str) -> list[dict]:
 async def fetch_all(ticker: str) -> list[dict]:
     all_data = []
     all_data.extend(fetch_news(ticker))
-    all_data.extend(fetch_reddit_mock(ticker))
-    all_data.extend(fetch_price(ticker))
+    # all_data.extend(fetch_reddit_mock(ticker))
+    # all_data.extend(fetch_price(ticker))
     all_data.sort(key=lambda x: x["timestamp"], reverse=True)
-    return all_data  # return full dicts, not just text
+    return all_data
