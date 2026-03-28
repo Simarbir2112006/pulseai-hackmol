@@ -26,7 +26,7 @@ from newsapi import NewsApiClient
 load_dotenv()
 
 # ── API Keys ────────────────────────────────────────────────────────────────
-NEWSAPI_KEY  = os.getenv("NEWS_API_KEY", "e9434256287646dc9586bdbb81deaf4a")
+NEWSAPI_KEY  = os.getenv("NEWS_API_KEY", "")
 FINNHUB_KEY  = os.getenv("FINNHUB_KEY", "")   # free at finnhub.io
 # StockTwits, Yahoo RSS, SEC EDGAR — no key needed
 
@@ -456,7 +456,7 @@ if __name__ == "__main__":
     print(json.dumps(results[:5], indent=2, default=str))
     print(f"\nTotal: {len(results)} items")
 
-    out = f"{ticker}_pipeline_output.json"
+    out = os.path.join(os.path.dirname(__file__), f"{ticker}_pipeline_output.json")
     with open(out, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"[SAVED] {out}")
