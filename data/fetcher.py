@@ -1,19 +1,3 @@
-"""
-PulseAI — data/fetcher_simar.py
-Multi-source data pipeline for stock signal detection.
-
-Sources:
-  1. NewsAPI          — financial headlines
-  2. Yahoo Finance RSS — real-time news feed
-  3. StockTwits        — retail investor sentiment (Reddit replacement)
-  4. yfinance extras   — analyst recommendations + recent news
-  5. pytrends          — Google search interest (trend weight signal)
-  6. SEC EDGAR         — insider buying/selling (Form 4 filings)
-  7. Finnhub           — analyst ratings + earnings surprises
-
-Owner: Sanveer (data pipeline)
-"""
-
 import os
 import asyncio
 import requests
@@ -22,7 +6,6 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from newsapi import NewsApiClient
-from datetime import datetime, timezone
 
 load_dotenv()
 
@@ -74,7 +57,7 @@ def fetch_yahoo_rss(ticker: str) -> list[dict]:
             results.append({
                 "source": "yahoo_rss",
                 "text": entry.title,
-                "timestamp": entry.get("published", datetime.now(timezone.utc).isoformat()),
+                "timestamp": entry.get("published", datetime.utcnow().isoformat()),
                 "url": entry.get("link", ""),
                 "weight": 1.0,
             })
@@ -89,23 +72,40 @@ def fetch_yahoo_rss(ticker: str) -> list[dict]:
 # SOURCE 3 — StockTwits (Reddit replacement — no API key, real retail data)
 # Returns posts with built-in bullish/bearish labels from retail investors
 # ════════════════════════════════════════════════════════════════════════════
-def fetch_benzinga(ticker: str) -> list[dict]:
+def fetch_stocktwits(ticker: str) -> list[dict]:
     try:
-        url = f"https://seekingalpha.com/api/sa/combined/{ticker}.xml"
-        feed = feedparser.parse(url)
+        url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
         results = []
-        for entry in feed.entries[:10]:
+        for msg in data.get("messages", []):
+            body = msg.get("body", "").strip()
+            if not body:
+                continue
+
+            # StockTwits gives us free bullish/bearish labels — use them
+            sentiment_label = (
+                msg.get("entities", {})
+                .get("sentiment", {})
+                .get("basic", "")
+            )
+            # Boost weight if user explicitly tagged bullish/bearish
+            weight = 1.3 if sentiment_label in ("Bullish", "Bearish") else 1.0
+
             results.append({
-                "source": "seekingalpha",
-                "text": entry.title,
-                "timestamp": entry.get("published", datetime.now(timezone.utc).isoformat()),
-                "url": entry.get("link", ""),
-                "weight": 1.2,
+                "source": "stocktwits",
+                "text": body,
+                "timestamp": msg.get("created_at", datetime.utcnow().isoformat()),
+                "stocktwits_sentiment": sentiment_label,
+                "weight": weight,
             })
-        print(f"[Fetcher] SeekingAlpha: {len(results)} items")
+
+        print(f"[Fetcher] StockTwits: {len(results)} items")
         return results
     except Exception as e:
-        print(f"[Fetcher] SeekingAlpha error: {e}")
+        print(f"[Fetcher] StockTwits error: {e}")
         return []
 
 
@@ -120,15 +120,29 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
 
         # 4a — Recent news from Yahoo (different endpoint than RSS)
         for article in (stock.news or [])[:10]:
-            title = article.get("title", "").strip()
+            # handle both old and new yfinance formats
+            content = article.get("content", {})
+            title = (
+                content.get("title")
+                or article.get("title", "")
+            ).strip()
+            
+            pub_time = (
+                content.get("pubDate")
+                or article.get("providerPublishTime")
+            )
+            
+            if isinstance(pub_time, (int, float)):
+                timestamp = datetime.utcfromtimestamp(pub_time).isoformat()
+            else:
+                timestamp = str(pub_time) if pub_time else datetime.utcnow().isoformat()
+            
             if title:
                 results.append({
                     "source": "yf_news",
                     "text": title,
-                    "timestamp": datetime.utcfromtimestamp(
-                        article.get("providerPublishTime", 0)
-                    ).isoformat(),
-                    "url": article.get("link", ""),
+                    "timestamp": timestamp,
+                    "url": content.get("canonicalUrl", {}).get("url", "") or article.get("link", ""),
                     "weight": 1.0,
                 })
 
@@ -137,9 +151,9 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
         if recs is not None and not recs.empty:
             latest = recs.iloc[-1]
             # Translate analyst consensus into a text signal
-            total_buy  = int(latest.get("strongBuy", 0)) + int(latest.get("buy", 0))
-            total_sell = int(latest.get("strongSell", 0)) + int(latest.get("sell", 0))
-            total_hold = int(latest.get("hold", 0))
+            total_buy  = int(latest["strongBuy"] if "strongBuy" in latest.index else 0) + int(latest["buy"] if "buy" in latest.index else 0)
+            total_sell = int(latest["strongSell"] if "strongSell" in latest.index else 0) + int(latest["sell"] if "sell" in latest.index else 0)
+            total_hold = int(latest["hold"] if "hold" in latest.index else 0)
 
             if total_buy > total_sell and total_buy > total_hold:
                 rec_text = f"{ticker} analyst consensus: majority BUY rating ({total_buy} buys vs {total_sell} sells)"
@@ -151,7 +165,7 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
             results.append({
                 "source": "yf_analyst",
                 "text": rec_text,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "weight": 1.5,   # analyst ratings carry more weight
             })
 
@@ -169,7 +183,7 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
             results.append({
                 "source": "yf_price",
                 "text": momentum_text,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "price_change_pct": round(change_pct, 2),
                 "weight": 1.2,
             })
@@ -235,13 +249,13 @@ def fetch_trend_score(ticker: str) -> float:
 # ════════════════════════════════════════════════════════════════════════════
 def fetch_insider_trades(ticker: str) -> list[dict]:
     try:
-        today = datetime.now(timezone.utc).replace(tzinfo=None)
+        today = datetime.utcnow()
         start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
+        end   = today.strftime("%Y-%m-%d")
 
         url = (
             f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22"
-            f"&dateRange=custom&startdt={start}&enddt={end}&forms=4"
+            f"&dateRange=custom&startdt={start}&enddt={end}&forms=4&hits.hits._source=display_names,file_date"
         )
         headers = {"User-Agent": "PulseAI sanveer@pulseai.com"}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -267,7 +281,6 @@ def fetch_insider_trades(ticker: str) -> list[dict]:
                 "text": trade_text,
                 "timestamp": filed_at,
                 "weight": 1.8,   # insider trades are a very strong signal
-                "filing_url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4&dateb=&owner=include&count=10&search_text=",
             })
 
         print(f"[Fetcher] SEC EDGAR: {len(results)} insider filings")
@@ -308,7 +321,7 @@ def fetch_finnhub(ticker: str) -> list[dict]:
             results.append({
                 "source": "finnhub_analyst",
                 "text": rec_text,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "weight": 1.5,
             })
     except Exception as e:
@@ -334,7 +347,7 @@ def fetch_finnhub(ticker: str) -> list[dict]:
                 results.append({
                     "source": "finnhub_earnings",
                     "text": surprise_text,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.utcnow().isoformat(),
                     "weight": 2.0,   # earnings surprises are the strongest signal
                     "eps_surprise": round(diff, 4),
                 })
@@ -344,6 +357,23 @@ def fetch_finnhub(ticker: str) -> list[dict]:
     print(f"[Fetcher] Finnhub: {len(results)} items")
     return results
 
+
+def get_live_price(ticker: str) -> dict:
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.fast_info
+        return {
+            "ticker": ticker,
+            "price": round(float(info.last_price), 2),
+            "change": round(float(info.last_price - info.previous_close), 2),
+            "change_pct": round(
+                ((info.last_price - info.previous_close) / info.previous_close) * 100, 2
+            ),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        print(f"[Fetcher] Live price error: {e}")
+        return {"ticker": ticker, "price": None, "change": None, "change_pct": None}
 
 # ════════════════════════════════════════════════════════════════════════════
 # MASTER FETCHER — fetch_all()
@@ -364,15 +394,15 @@ async def fetch_all(ticker: str) -> list[dict]:
 
     # Run all blocking fetches (they use requests, not async)
     # Run them in an executor so we don't block the event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
-    news_task        = loop.run_in_executor(None, fetch_news,           ticker)
-    yahoo_task       = loop.run_in_executor(None, fetch_yahoo_rss,      ticker)
-    stocktwits_task = loop.run_in_executor(None, fetch_benzinga, ticker)
-    yf_task          = loop.run_in_executor(None, fetch_yfinance_extras, ticker)
-    sec_task         = loop.run_in_executor(None, fetch_insider_trades,  ticker)
-    finnhub_task     = loop.run_in_executor(None, fetch_finnhub,         ticker)
-    trend_task       = loop.run_in_executor(None, fetch_trend_score,     ticker)
+    news_task        = loop.run_in_executor(None, fetch_news,            ticker)
+    yahoo_task       = loop.run_in_executor(None, fetch_yahoo_rss,       ticker)
+    stocktwits_task  = loop.run_in_executor(None, fetch_stocktwits,      ticker)
+    yf_task          = loop.run_in_executor(None, fetch_yfinance_extras,  ticker)
+    sec_task         = loop.run_in_executor(None, fetch_insider_trades,   ticker)
+    finnhub_task     = loop.run_in_executor(None, fetch_finnhub,          ticker)
+    trend_task       = loop.run_in_executor(None, fetch_trend_score,      ticker)
 
     (
         news, yahoo, stocktwits, yf_extras,
@@ -426,7 +456,7 @@ async def fetch_all(ticker: str) -> list[dict]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Quick test — run directly: python data/fetcher_simar.py
+# Quick test — run directly: python data/fetcher.py
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     import json
