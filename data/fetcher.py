@@ -1,19 +1,3 @@
-"""
-PulseAI — data/fetcher_simar.py
-Multi-source data pipeline for stock signal detection.
-
-Sources:
-  1. NewsAPI          — financial headlines
-  2. Yahoo Finance RSS — real-time news feed
-  3. StockTwits        — retail investor sentiment (Reddit replacement)
-  4. yfinance extras   — analyst recommendations + recent news
-  5. pytrends          — Google search interest (trend weight signal)
-  6. SEC EDGAR         — insider buying/selling (Form 4 filings)
-  7. Finnhub           — analyst ratings + earnings surprises
-
-Owner: Sanveer (data pipeline)
-"""
-
 import os
 import asyncio
 import requests
@@ -136,15 +120,29 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
 
         # 4a — Recent news from Yahoo (different endpoint than RSS)
         for article in (stock.news or [])[:10]:
-            title = article.get("title", "").strip()
+            # handle both old and new yfinance formats
+            content = article.get("content", {})
+            title = (
+                content.get("title")
+                or article.get("title", "")
+            ).strip()
+            
+            pub_time = (
+                content.get("pubDate")
+                or article.get("providerPublishTime")
+            )
+            
+            if isinstance(pub_time, (int, float)):
+                timestamp = datetime.utcfromtimestamp(pub_time).isoformat()
+            else:
+                timestamp = str(pub_time) if pub_time else datetime.utcnow().isoformat()
+            
             if title:
                 results.append({
                     "source": "yf_news",
                     "text": title,
-                    "timestamp": datetime.utcfromtimestamp(
-                        article.get("providerPublishTime", 0)
-                    ).isoformat(),
-                    "url": article.get("link", ""),
+                    "timestamp": timestamp,
+                    "url": content.get("canonicalUrl", {}).get("url", "") or article.get("link", ""),
                     "weight": 1.0,
                 })
 
@@ -153,9 +151,9 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
         if recs is not None and not recs.empty:
             latest = recs.iloc[-1]
             # Translate analyst consensus into a text signal
-            total_buy  = int(latest.get("strongBuy", 0)) + int(latest.get("buy", 0))
-            total_sell = int(latest.get("strongSell", 0)) + int(latest.get("sell", 0))
-            total_hold = int(latest.get("hold", 0))
+            total_buy  = int(latest["strongBuy"] if "strongBuy" in latest.index else 0) + int(latest["buy"] if "buy" in latest.index else 0)
+            total_sell = int(latest["strongSell"] if "strongSell" in latest.index else 0) + int(latest["sell"] if "sell" in latest.index else 0)
+            total_hold = int(latest["hold"] if "hold" in latest.index else 0)
 
             if total_buy > total_sell and total_buy > total_hold:
                 rec_text = f"{ticker} analyst consensus: majority BUY rating ({total_buy} buys vs {total_sell} sells)"
@@ -257,7 +255,7 @@ def fetch_insider_trades(ticker: str) -> list[dict]:
 
         url = (
             f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22"
-            f"&dateRange=custom&startdt={start}&enddt={end}&forms=4"
+            f"&dateRange=custom&startdt={start}&enddt={end}&forms=4&hits.hits._source=display_names,file_date"
         )
         headers = {"User-Agent": "PulseAI sanveer@pulseai.com"}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -283,7 +281,6 @@ def fetch_insider_trades(ticker: str) -> list[dict]:
                 "text": trade_text,
                 "timestamp": filed_at,
                 "weight": 1.8,   # insider trades are a very strong signal
-                "filing_url": f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4&dateb=&owner=include&count=10&search_text=",
             })
 
         print(f"[Fetcher] SEC EDGAR: {len(results)} insider filings")
@@ -361,6 +358,23 @@ def fetch_finnhub(ticker: str) -> list[dict]:
     return results
 
 
+def get_live_price(ticker: str) -> dict:
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.fast_info
+        return {
+            "ticker": ticker,
+            "price": round(float(info.last_price), 2),
+            "change": round(float(info.last_price - info.previous_close), 2),
+            "change_pct": round(
+                ((info.last_price - info.previous_close) / info.previous_close) * 100, 2
+            ),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        print(f"[Fetcher] Live price error: {e}")
+        return {"ticker": ticker, "price": None, "change": None, "change_pct": None}
+
 # ════════════════════════════════════════════════════════════════════════════
 # MASTER FETCHER — fetch_all()
 # Called by ai/agent/loop.py → _fetch_data()
@@ -380,15 +394,15 @@ async def fetch_all(ticker: str) -> list[dict]:
 
     # Run all blocking fetches (they use requests, not async)
     # Run them in an executor so we don't block the event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
-    news_task        = loop.run_in_executor(None, fetch_news,           ticker)
-    yahoo_task       = loop.run_in_executor(None, fetch_yahoo_rss,      ticker)
-    stocktwits_task  = loop.run_in_executor(None, fetch_stocktwits,     ticker)
-    yf_task          = loop.run_in_executor(None, fetch_yfinance_extras, ticker)
-    sec_task         = loop.run_in_executor(None, fetch_insider_trades,  ticker)
-    finnhub_task     = loop.run_in_executor(None, fetch_finnhub,         ticker)
-    trend_task       = loop.run_in_executor(None, fetch_trend_score,     ticker)
+    news_task        = loop.run_in_executor(None, fetch_news,            ticker)
+    yahoo_task       = loop.run_in_executor(None, fetch_yahoo_rss,       ticker)
+    stocktwits_task  = loop.run_in_executor(None, fetch_stocktwits,      ticker)
+    yf_task          = loop.run_in_executor(None, fetch_yfinance_extras,  ticker)
+    sec_task         = loop.run_in_executor(None, fetch_insider_trades,   ticker)
+    finnhub_task     = loop.run_in_executor(None, fetch_finnhub,          ticker)
+    trend_task       = loop.run_in_executor(None, fetch_trend_score,      ticker)
 
     (
         news, yahoo, stocktwits, yf_extras,
@@ -442,7 +456,7 @@ async def fetch_all(ticker: str) -> list[dict]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Quick test — run directly: python data/fetcher_simar.py
+# Quick test — run directly: python data/fetcher.py
 # ════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     import json

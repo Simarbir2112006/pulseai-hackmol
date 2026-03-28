@@ -69,3 +69,8 @@ async def remove_from_watchlist(request: Request, ticker: str = Query(...)):
         watchlist.remove(ticker)
     request.app.state.watchlist = watchlist
     return {"watchlist": watchlist}
+
+@router.get("/price")
+async def live_price(ticker: str = Query(default="TSLA")):
+    from data.fetcher import get_live_price
+    return get_live_price(ticker.upper())
