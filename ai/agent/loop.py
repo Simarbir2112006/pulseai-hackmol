@@ -9,18 +9,11 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 60))  # seconds
 
 
 async def _fetch_data(ticker: str) -> list[str]:
-    """
-    Placeholder — Jaspreet's pipeline feeds this.
-    Returns a list of raw text strings (headlines + reddit posts).
-    Replace this with the actual import once data/ branch is merged.
-    """
-    # from data.fetcher import fetch_all
-    # return await fetch_all(ticker)
-    return []
+    from data.fetcher import fetch_all
+    return await fetch_all(ticker)
 
 
 def _run_analysis(ticker: str, texts: list[str]) -> tuple[AnomalyResult, dict]:
-    """Score → detect → brief. Returns (AnomalyResult, brief dict)."""
     scored = score_batch(texts)
     result = detect(scored)
     brief = generate_brief(ticker, result) if result.detected else {}
@@ -28,7 +21,6 @@ def _run_analysis(ticker: str, texts: list[str]) -> tuple[AnomalyResult, dict]:
 
 
 def _make_signal(ticker: str, result: AnomalyResult, brief: dict) -> dict:
-    """Build the signal payload the backend stores and serves."""
     return {
         "ticker": ticker,
         "timestamp": datetime.utcnow().isoformat(),
