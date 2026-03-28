@@ -11,8 +11,23 @@ async def latest_signal(request: Request, ticker: str = Query(default="TSLA")):
     latest = getattr(request.app.state, "latest_signals", {})
     signal = latest.get(ticker)
     if not signal:
-        from backend.services.ai_service import get_latest_signal
-        signal = await get_latest_signal(ticker)
+        return {
+            "ticker": ticker,
+            "detected": False,
+            "signal_type": "neutral",
+            "avg_sentiment": 0,
+            "item_count": 0,
+            "flagged_items": [],
+            "brief": {},
+            "prediction": {},
+            "combined_signal": {
+                "verdict": "HOLD",
+                "confidence": "low",
+                "sentiment_aligned": False,
+                "price_aligned": False,
+            },
+            "message": "Waiting for first cycle to complete..."
+        }
     return signal
 
 

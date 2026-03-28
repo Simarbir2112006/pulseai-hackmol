@@ -1,12 +1,31 @@
+# Web framework
 fastapi
 uvicorn
+
+# Frontend
 streamlit
-requests
-numpy
-scikit-learn
+plotly
+pandas
+
+# ML / AI
 transformers
+torch
+scikit-learn
+numpy
+prophet
+
+# Data sources
 yfinance
-praw
 newsapi-python
+feedparser
+requests
+pytrends
+
+# LLM
 groq
+
+# Environment
 python-dotenv
+
+# Misc
+httpx

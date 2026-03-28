@@ -84,23 +84,28 @@ def _parse_response(content: str) -> dict:
     buffer = []
 
     KEY_MAP = {
-        "summary:": "summary",
-        "why it matters:": "why_it_matters",
+        "summary": "summary",
+        "why it matters": "why_it_matters",
         "what this could mean": "what_this_means",
-        "confidence:": "confidence",
+        "confidence": "confidence",
     }
 
     for line in lines:
-        stripped = line.strip()
+        # strip markdown bold ** and whitespace
+        stripped = line.strip().lstrip("*").rstrip("*").strip()
+        
         matched = False
         for prefix, key in KEY_MAP.items():
             if stripped.lower().startswith(prefix):
                 if current_key and buffer:
                     result[current_key] = " ".join(buffer).strip()
                 current_key = key
-                buffer = [stripped.split(":", 1)[-1].strip()]
+                # get text after the colon
+                after_colon = stripped.split(":", 1)[-1].strip().lstrip("*").strip()
+                buffer = [after_colon] if after_colon else []
                 matched = True
                 break
+        
         if not matched and stripped and current_key:
             buffer.append(stripped)
 
@@ -151,6 +156,7 @@ def generate_brief(
         )
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
+        print(f"[Groq] Raw response:\n{content}")
         parsed = _parse_response(content)
 
         parsed["ticker"] = ticker

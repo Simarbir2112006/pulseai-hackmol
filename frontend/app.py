@@ -84,7 +84,9 @@ m2.metric(
     f"${data['predicted_tomorrow']}",
     f"{data['pct_change_tomorrow']:+.2f}%"
 )
-m3.metric("Sentiment Score", f"{data['sentiment']:.1f}/100")
+sentiment_raw = data["sentiment"]  # already *100
+label = "Bullish 📈" if sentiment_raw > 10 else "Bearish 📉" if sentiment_raw < -10 else "Neutral ⚪"
+m3.metric("Sentiment", label, f"{sentiment_raw:+.1f}")
 m4.metric("Items Analysed", data["item_count"])
 
 st.markdown(f"*Price range tomorrow: ${data['price_lower']} — ${data['price_upper']}*")
@@ -150,7 +152,9 @@ with right:
 
     # LLM Brief
     st.subheader("🤖 AI Brief")
-    if data["llm_brief"]:
+    if data["anomaly"] and not data["llm_brief"]:
+        st.warning("Anomaly detected but brief is still generating — refresh in a moment.")
+    elif data["llm_brief"]:
         st.markdown(f"**Summary**  \n{data['llm_brief']}")
         if data["why_it_matters"]:
             st.markdown(f"**Why it matters**  \n{data['why_it_matters']}")

@@ -2,7 +2,7 @@ import requests
 from datetime import datetime
 import random
 
-API_URL = "http://localhost:8000"
+API_URL = "http://127.0.0.1:8000"
 
 
 def load_data(ticker: str) -> dict:
@@ -10,7 +10,7 @@ def load_data(ticker: str) -> dict:
         response = requests.get(
             f"{API_URL}/signals/latest",
             params={"ticker": ticker},
-            timeout=10
+            timeout=120
         )
         if response.status_code != 200:
             raise Exception(f"Bad response: {response.status_code}")

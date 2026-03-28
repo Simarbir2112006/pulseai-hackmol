@@ -53,9 +53,12 @@ def _run_analysis(ticker: str, items: list[dict]) -> tuple:
 
     result = detect(all_scored)
 
-    # get prediction first, pass into brief
+    result = detect(all_scored)
+    print(f"[Debug] detected={result.detected} flagged={len(result.flagged_items)} signal={result.signal_type}")
+
     prediction = prophet_predict(ticker)
     brief = generate_brief(ticker, result, prediction) if result.detected else {}
+    print(f"[Debug] brief={brief}")
 
     return result, brief, prediction
 
