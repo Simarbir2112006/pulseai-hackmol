@@ -1,129 +1,174 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 import time
-from loader import load_data   # ✅ NEW
+from loader import load_data, get_watchlist, add_ticker, remove_ticker
 
-# Page config
-st.set_page_config(page_title="Real-Time Sentiment Dashboard", layout="wide")
+st.set_page_config(page_title="PulseAI", layout="wide", page_icon="📡")
 
-# Initialize session state
-if "ticker" not in st.session_state:
-    st.session_state.ticker = ""
-if "monitoring" not in st.session_state:
-    st.session_state.monitoring = False
-if "anomaly" not in st.session_state:
-    st.session_state.anomaly = False
-
-# -----------------
-# 1. INPUT PANEL
-# -----------------
-st.sidebar.title("Input Panel")
-
-ticker_input = st.sidebar.text_input("Stock Ticker", value=st.session_state.ticker).upper()
-
-if st.sidebar.button("Start Monitoring"):
-    if ticker_input:
-        st.session_state.ticker = ticker_input
-        st.session_state.monitoring = True
-        st.session_state.anomaly = False
-        st.rerun()
-
+# ── Sidebar ───────────────────────────────────────────────────────────────
+st.sidebar.title("📡 PulseAI")
+st.sidebar.markdown("*Autonomous market intelligence*")
 st.sidebar.markdown("---")
 
-if st.sidebar.button("Stop Monitoring"):
-    st.session_state.monitoring = False
-    st.session_state.ticker = ""
-    st.session_state.anomaly = False
-    st.rerun()
+# Watchlist management
+watchlist = get_watchlist()
+st.sidebar.subheader("Your Watchlist")
+selected_ticker = st.sidebar.selectbox("Select stock", watchlist)
 
-st.sidebar.subheader("Status")
-if st.session_state.monitoring and st.session_state.ticker:
-    st.sidebar.info(f"Watching {st.session_state.ticker}")
-else:
-    st.sidebar.warning("Idle")
-
-# -----------------
-# 2 & 3. MAIN DASHBOARD / ANOMALY ALERT
-# -----------------
-if st.session_state.monitoring and st.session_state.ticker:
-
-    # ✅ REPLACED MOCK WITH BACKEND
-    data = load_data(st.session_state.ticker)
-
-    st.session_state.anomaly = data["anomaly"]
-
-    st.sidebar.metric("Current Sentiment Score", f"{data['sentiment']:.2f}")
-    st.sidebar.metric("Signal", data.get("signal", "HOLD"))   # ✅ NEW
-
-    # -----------------
-    # ANOMALY VIEW
-    # -----------------
-    if st.session_state.anomaly:
-        st.markdown(
-            """
-            <div style="background-color: #ffcccc; padding: 20px; border-radius: 10px; border: 2px solid red;">
-                <h1 style="color: red; text-align: center;">🚨 ANOMALY DETECTED 🚨</h1>
-            </div>
-            <br>
-            """,
-            unsafe_allow_html=True
-        )
-
-        st.error(f"Anomaly detected for stock: {st.session_state.ticker}")
-
-        st.subheader("💡 LLM Explanation")
-        st.write(data["llm_brief"])
-
-        st.subheader("📊 Signal Details")
-        st.json(data)
-
-    # -----------------
-    # NORMAL DASHBOARD
-    # -----------------
-    else:
-        st.title("Live Monitoring")
-
-        if not data["time_series"]:
-            st.warning("No data available yet...")
+st.sidebar.markdown("---")
+st.sidebar.subheader("Manage Watchlist")
+new_ticker = st.sidebar.text_input("Add ticker (max 3)").upper()
+col1, col2 = st.sidebar.columns(2)
+if col1.button("Add"):
+    if new_ticker:
+        result = add_ticker(new_ticker)
+        if "error" in result:
+            st.sidebar.error(result["error"])
         else:
-            df = pd.DataFrame(data["time_series"])
+            st.sidebar.success(f"{new_ticker} added")
+            st.rerun()
 
-            fig = px.line(
-                df,
-                x="time",
-                y="sentiment",
-                title=f"{st.session_state.ticker} Sentiment Over Time",
-                markers=True
-            )
-
-            fig.update_traces(line_color="green")
-            fig.update_layout(
-                yaxis_range=[0, 100],
-                xaxis_title="Time",
-                yaxis_title="Sentiment"
-            )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("Live Feed")
-            for article in data["news"]:
-                st.markdown(f"**{article['title']}**")
-                st.caption(f"{article['source']} - {article['time']}")
-                st.markdown("---")
-
-        with col2:
-            st.subheader("System Status")
-            st.success("🟢 No anomaly detected")
-            st.metric("System Health", "Optimal")
-
-    # Refresh
-    time.sleep(3)
+remove_ticker_input = st.sidebar.selectbox("Remove", watchlist)
+if col2.button("Remove"):
+    remove_ticker(remove_ticker_input)
     st.rerun()
 
-else:
-    st.title("Dashboard")
-    st.write("Please enter a stock ticker in the sidebar and click **Start Monitoring** to begin.")
+st.sidebar.markdown("---")
+auto_refresh = st.sidebar.checkbox("Auto refresh (60s)", value=True)
+
+# ── Load data ─────────────────────────────────────────────────────────────
+with st.spinner(f"Fetching latest signal for {selected_ticker}..."):
+    data = load_data(selected_ticker)
+
+# ── Header ────────────────────────────────────────────────────────────────
+st.title(f"📊 {data['ticker']} — Market Intelligence")
+st.caption(f"Last updated: {data['timestamp']}")
+
+# ── Combined signal banner ────────────────────────────────────────────────
+verdict = data["verdict"]
+confidence = data["confidence"]
+
+COLORS = {
+    "STRONG BUY": "#00c853",
+    "WEAK BUY": "#69f0ae",
+    "HOLD": "#ffd740",
+    "WEAK SELL": "#ff6d00",
+    "STRONG SELL": "#d50000",
+}
+color = COLORS.get(verdict, "#888888")
+
+st.markdown(
+    f"""
+    <div style="background:{color}22; border-left: 6px solid {color};
+                padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+        <h2 style="color:{color}; margin:0">
+            {verdict} &nbsp;·&nbsp;
+            <span style="font-size:0.7em">Confidence: {confidence.upper()}</span>
+        </h2>
+        <p style="margin:4px 0 0 0; color:#ccc; font-size:0.85em">
+            Sentiment aligned: {"✅" if data["sentiment_aligned"] else "❌"} &nbsp;|&nbsp;
+            Price model aligned: {"✅" if data["price_aligned"] else "❌"} &nbsp;|&nbsp;
+            Sources: {", ".join(data["sources_used"]) if data["sources_used"] else "—"}
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# ── Metrics row ───────────────────────────────────────────────────────────
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Current Price", f"${data['current_price']}")
+m2.metric(
+    f"Tomorrow ({data['predicted_tomorrow_date']})",
+    f"${data['predicted_tomorrow']}",
+    f"{data['pct_change_tomorrow']:+.2f}%"
+)
+m3.metric("Sentiment Score", f"{data['sentiment']:.1f}/100")
+m4.metric("Items Analysed", data["item_count"])
+
+st.markdown(f"*Price range tomorrow: ${data['price_lower']} — ${data['price_upper']}*")
+
+st.markdown("---")
+
+# ── Two column layout ─────────────────────────────────────────────────────
+left, right = st.columns([2, 1])
+
+with left:
+    # Sentiment chart
+    st.subheader("📈 Flagged Sentiment Scores")
+    if data["time_series"]:
+        df = pd.DataFrame(data["time_series"])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df["time"],
+            y=df["sentiment"],
+            mode="lines+markers",
+            line=dict(color=color, width=2),
+            marker=dict(size=8),
+            hovertemplate="<b>%{text}</b><br>Score: %{y:.1f}<extra></extra>",
+            text=df["source"],
+        ))
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.update_layout(
+            yaxis_range=[-100, 100],
+            yaxis_title="Sentiment Score",
+            xaxis_title="Time",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            height=300,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No anomalies detected this cycle — market is quiet.")
+
+    # News feed
+    st.subheader("📰 Flagged Headlines")
+    if data["news"]:
+        for item in data["news"]:
+            z = item.get("z_score")
+            z_str = f"Z: {z:+.2f}" if z else "Isolation Forest"
+            score = item.get("score", 0)
+            badge_color = "🟢" if score > 0.3 else "🔴" if score < -0.3 else "⚪"
+            st.markdown(
+                f"{badge_color} **{item['title']}**  \n"
+                f"<span style='color:gray; font-size:0.8em'>"
+                f"{item['source'].upper()} · {item['time']} · Score: {score:+.2f} · {z_str}"
+                f"</span>",
+                unsafe_allow_html=True
+            )
+            st.markdown("---")
+    else:
+        st.info("No flagged headlines this cycle.")
+
+with right:
+    # Anomaly alert
+    if data["anomaly"]:
+        st.error(f"🚨 Anomaly Detected — {data['signal_type'].replace('_', ' ').title()}")
+    else:
+        st.success("✅ No anomaly detected")
+
+    # LLM Brief
+    st.subheader("🤖 AI Brief")
+    if data["llm_brief"]:
+        st.markdown(f"**Summary**  \n{data['llm_brief']}")
+        if data["why_it_matters"]:
+            st.markdown(f"**Why it matters**  \n{data['why_it_matters']}")
+        if data["what_this_means"]:
+            st.markdown(f"**What this could mean for you**  \n{data['what_this_means']}")
+        if data["brief_confidence"]:
+            st.caption(f"Brief confidence: {data['brief_confidence']}")
+    else:
+        st.info("No brief generated — no anomaly detected.")
+
+    # System status
+    st.subheader("⚙️ System")
+    st.markdown(f"**Watchlist:** {', '.join(watchlist)}")
+    st.markdown(f"**Poll interval:** 60s")
+    st.markdown(f"**Sources active:** NewsAPI, Yahoo RSS, StockTwits, yfinance, SEC EDGAR")
+
+# ── Auto refresh ──────────────────────────────────────────────────────────
+if auto_refresh:
+    time.sleep(60)
+    st.rerun()
+
