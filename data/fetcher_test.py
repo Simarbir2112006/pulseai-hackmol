@@ -1,12 +1,33 @@
+from dotenv import load_dotenv, find_dotenv
+import os
 import yfinance as yf
 from newsapi import NewsApiClient
 import json
 from datetime import datetime
 
 # =============================================
-# API KEYS — fill these in before hackathon
+# Load API keys from .env file
 # =============================================
-NEWSAPI_KEY = "e9434256287646dc9586bdbb81deaf4a"
+# find_dotenv() forces it to check parent folders!
+load_dotenv(find_dotenv())
+
+NEWSAPI_KEY          = os.getenv("NEWSAPI_KEY")
+REDDIT_CLIENT_ID     = os.getenv("REDDIT_CLIENT_ID")
+# ... the rest of your code ...
+
+# =============================================
+# Safety check — crash early with clear message
+# =============================================
+if not NEWSAPI_KEY:
+    raise ValueError("NEWSAPI_KEY is missing. Add it to your .env file.")
+
+# =============================================
+# Output folder setup
+# __file__ = location of THIS script file (works on all machines)
+# So /data is always created next to fetcher_test.py, not wherever you cd from
+# =============================================
+# OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath("E:\HACKMOL7.0\pulseai-hackmol\data")), "data")
+# os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # =============================================
 # FLAG: Set to True once Reddit API is approved
@@ -35,22 +56,18 @@ def fetch_news(ticker):
 # SOURCE 2 — Reddit Posts
 # MOCKED until API access is approved.
 # Once approved:
-#   1. pip install praw
-#   2. Set REDDIT_API_READY = True above
-#   3. Fill in REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET
+#   1. Set REDDIT_API_READY = True above
+#   2. Add REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET to your .env file
 # =============================================
-REDDIT_CLIENT_ID = "your_client_id_here"
-REDDIT_CLIENT_SECRET = "your_client_secret_here"
-
 def fetch_reddit(ticker):
     if not REDDIT_API_READY:
         print("[INFO] Reddit API not yet approved — using mock data.")
         return [
             {"source": "reddit", "text": f"{ticker} earnings beat expectations, bulls loading up", "timestamp": "2026-03-28T09:30:00"},
-            {"source": "reddit", "text": f"Is {ticker} still a buy at this price?", "timestamp": "2026-03-28T09:00:00"},
-            {"source": "reddit", "text": f"{ticker} short sellers getting crushed today", "timestamp": "2026-03-28T08:30:00"},
-            {"source": "reddit", "text": f"Major recall rumor circulating for {ticker} — anyone else seeing this?", "timestamp": "2026-03-28T08:00:00"},
-            {"source": "reddit", "text": f"{ticker} CEO sold shares last week, should we be worried?", "timestamp": "2026-03-28T07:30:00"},
+            {"source": "reddit", "text": f"Is {ticker} still a buy at this price?",                "timestamp": "2026-03-28T09:00:00"},
+            {"source": "reddit", "text": f"{ticker} short sellers getting crushed today",           "timestamp": "2026-03-28T08:30:00"},
+            {"source": "reddit", "text": f"Major recall rumor circulating for {ticker}",            "timestamp": "2026-03-28T08:00:00"},
+            {"source": "reddit", "text": f"{ticker} CEO sold shares last week, should we worry?",   "timestamp": "2026-03-28T07:30:00"},
         ]
 
     # --- Real Reddit fetch (runs only when REDDIT_API_READY = True) ---
@@ -106,10 +123,10 @@ print("--- TOP 5 ITEMS (most recent) ---")
 print(json.dumps(all_data[:5], indent=2))
 print(f"\nTotal items fetched: {len(all_data)}")
 
-# Save full output to JSON file — Simarbir can use this directly for FinBERT scoring
-output_filename = f"{ticker}_pipeline_output.json"
+# Save output INSIDE /data folder using OUTPUT_DIR defined at the top
+output_filename = os.path.join("E:\HACKMOL7.0\pulseai-hackmol\data", f"{ticker}_pipeline_output.json")
 with open(output_filename, "w") as f:
     json.dump(all_data, f, indent=2)
 
-print(f"\n[SAVED] Full output written to: {output_filename}")
+print(f"\n[SAVED] Output written to: {output_filename}")
 print("[NEXT] Hand this file to Simarbir for FinBERT sentiment scoring.")
