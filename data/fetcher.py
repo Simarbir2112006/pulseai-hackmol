@@ -6,6 +6,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from newsapi import NewsApiClient
+from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 
@@ -68,45 +69,6 @@ def fetch_yahoo_rss(ticker: str) -> list[dict]:
         return []
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# SOURCE 3 — StockTwits (Reddit replacement — no API key, real retail data)
-# Returns posts with built-in bullish/bearish labels from retail investors
-# ════════════════════════════════════════════════════════════════════════════
-def fetch_stocktwits(ticker: str) -> list[dict]:
-    try:
-        url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-
-        results = []
-        for msg in data.get("messages", []):
-            body = msg.get("body", "").strip()
-            if not body:
-                continue
-
-            # StockTwits gives us free bullish/bearish labels — use them
-            sentiment_label = (
-                msg.get("entities", {})
-                .get("sentiment", {})
-                .get("basic", "")
-            )
-            # Boost weight if user explicitly tagged bullish/bearish
-            weight = 1.3 if sentiment_label in ("Bullish", "Bearish") else 1.0
-
-            results.append({
-                "source": "stocktwits",
-                "text": body,
-                "timestamp": msg.get("created_at", datetime.utcnow().isoformat()),
-                "stocktwits_sentiment": sentiment_label,
-                "weight": weight,
-            })
-
-        print(f"[Fetcher] StockTwits: {len(results)} items")
-        return results
-    except Exception as e:
-        print(f"[Fetcher] StockTwits error: {e}")
-        return []
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -398,24 +360,22 @@ async def fetch_all(ticker: str) -> list[dict]:
 
     news_task        = loop.run_in_executor(None, fetch_news,            ticker)
     yahoo_task       = loop.run_in_executor(None, fetch_yahoo_rss,       ticker)
-    stocktwits_task  = loop.run_in_executor(None, fetch_stocktwits,      ticker)
     yf_task          = loop.run_in_executor(None, fetch_yfinance_extras,  ticker)
     sec_task         = loop.run_in_executor(None, fetch_insider_trades,   ticker)
     finnhub_task     = loop.run_in_executor(None, fetch_finnhub,          ticker)
     trend_task       = loop.run_in_executor(None, fetch_trend_score,      ticker)
 
     (
-        news, yahoo, stocktwits, yf_extras,
+        news, yahoo, yf_extras,
         sec, finnhub, trend_multiplier
     ) = await asyncio.gather(
-        news_task, yahoo_task, stocktwits_task, yf_task,
+        news_task, yahoo_task, yf_task,
         sec_task, finnhub_task, trend_task
     )
 
     all_data = []
     all_data.extend(news)
     all_data.extend(yahoo)
-    all_data.extend(stocktwits)
     all_data.extend(yf_extras)
     all_data.extend(sec)
     all_data.extend(finnhub)
