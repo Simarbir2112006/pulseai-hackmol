@@ -1,6 +1,6 @@
 import os
 import requests
-from anomaly.detector import AnomalyResult
+from ai.anomaly.detector import AnomalyResult
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
