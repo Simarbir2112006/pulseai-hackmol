@@ -1,10 +1,13 @@
 import os
 import requests
+from dotenv import load_dotenv
 from ai.anomaly.detector import AnomalyResult
+
+load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama3-8b-8192"
+MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """You are a financial assistant helping everyday users understand market news.
 Your goal is to explain what's happening and gently guide the user on what it could mean for them — without giving direct financial advice.

@@ -2,55 +2,28 @@ import asyncio
 from ai.sentiment.finbert import score_batch
 from ai.anomaly.detector import detect
 from ai.llm.groq_client import generate_brief
-from ai.agent.loop import run_loop
+from ai.agent.loop import run_loop, run_once
 
 TICKER = "TSLA"
 
 
 def analyze() -> dict:
-    """
-    On-demand single analysis run for TSLA.
-    Synchronous — FastAPI can call this directly.
-
-    Returns:
-    {
-        ticker, timestamp, detected, signal_type,
-        avg_sentiment, item_count, flagged_items, brief
-    }
-    """
-    from agent.loop import run_once
     return asyncio.run(run_once(TICKER))
 
 
 def run_pipeline(texts: list[str]) -> dict:
-    """
-    Core logic — takes raw texts, runs the full AI stack.
-    Useful for testing each stage independently without the agent loop.
-
-    Usage:
-        from ai.pipeline import run_pipeline
-        result = run_pipeline(["Tesla recalls 10000 cars", "Musk tweets about TSLA"])
-    """
     if not texts:
-        return {
-            "ticker": TICKER,
-            "detected": False,
-            "reason": "no data provided",
-            "brief": {}
-        }
+        return {"ticker": TICKER, "detected": False, "reason": "no data", "brief": {}}
 
-    # stage 1 — sentiment
     scored = score_batch(texts)
     print(f"[Pipeline] Scored {len(scored)} items")
 
-    # stage 2 — anomaly detection
     result = detect(scored)
-    print(f"[Pipeline] Anomaly detected: {result.detected} | Signal: {result.signal_type} | Avg: {result.avg_sentiment:+.3f}")
+    print(f"[Pipeline] Detected: {result.detected} | Signal: {result.signal_type} | Avg: {result.avg_sentiment:+.3f}")
 
-    # stage 3 — brief generation (only if anomaly fired)
     brief = {}
     if result.detected:
-        print(f"[Pipeline] Generating brief for {len(result.flagged_items)} flagged items...")
+        print(f"[Pipeline] Generating brief...")
         brief = generate_brief(TICKER, result)
 
     return {
@@ -65,14 +38,5 @@ def run_pipeline(texts: list[str]) -> dict:
 
 
 def start_background_loop(on_signal=None):
-    """
-    Starts the autonomous 24/7 agent loop for TSLA.
-    Call once at FastAPI startup.
-
-    Example in FastAPI main.py:
-        @app.on_event("startup")
-        async def startup():
-            asyncio.create_task(start_background_loop(on_signal=push_to_frontend))
-    """
     print(f"[Pipeline] Starting background loop for {TICKER}")
     return run_loop(TICKER, on_signal=on_signal)
