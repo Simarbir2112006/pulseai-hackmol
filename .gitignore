@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Environment files
 .env
 
@@ -10,3 +11,10 @@ __pycache__/
 
 # OS files
 .DS_Store
+=======
+.env
+__pycache__/
+*.pyc
+.venv/
+*.json
+>>>>>>> 8d54fa01e67495521b29b0f08e6283c4dc6028c3
