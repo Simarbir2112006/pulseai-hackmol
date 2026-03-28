@@ -1,99 +1,155 @@
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import random
 
-API_URL = "http://localhost:8000/signals/latest"
+API_URL = "http://localhost:8000"
 
 
-def generate_mock_data(ticker):
-    now = datetime.now()
-
-    time_series = []
-    for i in range(20):
-        t = (now - timedelta(seconds=i * 5)).strftime("%H:%M:%S")
-        sentiment = random.uniform(40, 70)
-
-        time_series.append({
-            "time": t,
-            "sentiment": sentiment
-        })
-
-    time_series.reverse()
-
-    anomaly = random.random() > 0.8
-
-    news = [
-        {
-            "title": f"{ticker} gaining momentum in market",
-            "source": "MockNews",
-            "time": now.strftime("%H:%M:%S")
-        },
-        {
-            "title": f"Investors discussing {ticker} heavily",
-            "source": "Social Feed",
-            "time": (now - timedelta(minutes=2)).strftime("%H:%M:%S")
-        }
-    ]
-
-    return {
-        "ticker": ticker,
-        "sentiment": time_series[-1]["sentiment"],
-        "time_series": time_series,
-        "anomaly": anomaly,
-        "news": news,
-        "llm_brief": f"Mock analysis: sentiment trending {'positive' if not anomaly else 'volatile'}",
-        "signal": random.choice(["BUY", "SELL", "HOLD"])
-    }
-
-
-def load_data(ticker):
-    # 🔥 If API not available → use mock
-    if not API_URL:
-        return generate_mock_data(ticker)
-
+def load_data(ticker: str) -> dict:
     try:
-        response = requests.get(f"{API_URL}?ticker={ticker}", timeout=5)
-
+        response = requests.get(
+            f"{API_URL}/signals/latest",
+            params={"ticker": ticker},
+            timeout=10
+        )
         if response.status_code != 200:
-            raise Exception("Bad API response")
+            raise Exception(f"Bad response: {response.status_code}")
 
         raw = response.json()
 
+        # build time series from flagged items for the chart
         time_series = []
         for item in raw.get("flagged_items", []):
             ts = item.get("timestamp", "")
-
             try:
-                parsed_time = datetime.fromisoformat(ts.replace("Z", ""))
-                time_str = parsed_time.strftime("%H:%M:%S")
-            except:
-                time_str = ts[-8:] if ts else ""
-
+                parsed = datetime.fromisoformat(ts.replace("Z", ""))
+                time_str = parsed.strftime("%H:%M:%S")
+            except Exception:
+                time_str = ts[-8:] if ts else "00:00:00"
             time_series.append({
                 "time": time_str,
-                "sentiment": float(item.get("score", 0)) * 100
+                "sentiment": round(float(item.get("score", 0)) * 100, 2),
+                "source": item.get("source", "unknown"),
+                "z_score": item.get("z_score", None),
             })
 
-        time_series = sorted(time_series, key=lambda x: x["time"])
+        time_series.sort(key=lambda x: x["time"])
 
-        news = []
-        for item in raw.get("flagged_items", []):
-            news.append({
+        # news feed from flagged items
+        news = [
+            {
                 "title": item.get("text", ""),
                 "source": item.get("source", "unknown"),
-                "time": item.get("timestamp", "")
-            })
+                "time": item.get("timestamp", ""),
+                "score": item.get("score", 0),
+                "z_score": item.get("z_score"),
+            }
+            for item in raw.get("flagged_items", [])
+        ]
+
+        prediction = raw.get("prediction", {})
+        combined = raw.get("combined_signal", {})
+        brief = raw.get("brief", {})
 
         return {
             "ticker": raw.get("ticker", ticker),
-            "sentiment": float(raw.get("avg_sentiment", 0)) * 100,
+            "timestamp": raw.get("timestamp", ""),
+            "sentiment": round(float(raw.get("avg_sentiment", 0)) * 100, 2),
             "time_series": time_series,
             "anomaly": bool(raw.get("detected", False)),
+            "signal_type": raw.get("signal_type", "neutral"),
             "news": news,
-            "llm_brief": raw.get("brief", {}).get("summary", "No summary available"),
-            "signal": raw.get("brief", {}).get("signal", "HOLD")
+            "item_count": raw.get("item_count", 0),
+
+            # prediction
+            "current_price": prediction.get("current_price", "?"),
+            "predicted_tomorrow": prediction.get("predicted_tomorrow", "?"),
+            "predicted_tomorrow_date": prediction.get("predicted_tomorrow_date", ""),
+            "pct_change_tomorrow": prediction.get("pct_change_tomorrow", 0),
+            "price_direction": prediction.get("direction", "unknown"),
+            "price_lower": prediction.get("confidence_interval_tomorrow", {}).get("lower", "?"),
+            "price_upper": prediction.get("confidence_interval_tomorrow", {}).get("upper", "?"),
+
+            # combined signal
+            "verdict": combined.get("verdict", "HOLD"),
+            "confidence": combined.get("confidence", "low"),
+            "sentiment_aligned": combined.get("sentiment_aligned", False),
+            "price_aligned": combined.get("price_aligned", False),
+
+            # brief
+            "llm_brief": brief.get("summary", "No summary available"),
+            "why_it_matters": brief.get("why_it_matters", ""),
+            "what_this_means": brief.get("what_this_means", ""),
+            "brief_confidence": brief.get("confidence", ""),
+            "sources_used": brief.get("sources_used", []),
+
+            # signal
+            "signal": combined.get("verdict", "HOLD"),
         }
 
     except Exception as e:
-        print("API Error:", e)
-        return generate_mock_data(ticker)
+        print(f"[Loader] Error: {e}")
+        return _mock(ticker)
+
+
+def get_watchlist() -> list:
+    try:
+        r = requests.get(f"{API_URL}/signals/watchlist", timeout=5)
+        return r.json().get("watchlist", ["TSLA"])
+    except Exception:
+        return ["TSLA"]
+
+
+def add_ticker(ticker: str) -> dict:
+    try:
+        r = requests.post(
+            f"{API_URL}/signals/watchlist/add",
+            params={"ticker": ticker},
+            timeout=5
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def remove_ticker(ticker: str) -> dict:
+    try:
+        r = requests.post(
+            f"{API_URL}/signals/watchlist/remove",
+            params={"ticker": ticker},
+            timeout=5
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _mock(ticker: str) -> dict:
+    """Fallback mock if backend is down."""
+    return {
+        "ticker": ticker,
+        "timestamp": "",
+        "sentiment": 50.0,
+        "time_series": [],
+        "anomaly": False,
+        "signal_type": "neutral",
+        "news": [],
+        "item_count": 0,
+        "current_price": "?",
+        "predicted_tomorrow": "?",
+        "predicted_tomorrow_date": "",
+        "pct_change_tomorrow": 0,
+        "price_direction": "unknown",
+        "price_lower": "?",
+        "price_upper": "?",
+        "verdict": "HOLD",
+        "confidence": "low",
+        "sentiment_aligned": False,
+        "price_aligned": False,
+        "llm_brief": "Backend unavailable.",
+        "why_it_matters": "",
+        "what_this_means": "",
+        "brief_confidence": "",
+        "sources_used": [],
+        "signal": "HOLD",
+    }
