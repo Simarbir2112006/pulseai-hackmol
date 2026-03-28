@@ -1,9 +1,33 @@
 import requests
 from datetime import datetime
 import random
+import yfinance as yf
 
 API_URL = "http://localhost:8000"
 
+# ── Trending tickers ───────────────────────────────────────────────────────
+# Fallback list if yfinance trending call fails
+FALLBACK_TICKERS = [
+    "TSLA", "NVDA", "AAPL", "MSFT", "AMZN",
+    "META", "GOOGL", "AMD", "NFLX", "PLTR"
+]
+def get_trending_tickers(limit: int = 10) -> list[str]:
+    """
+    Fetch top trending tickers from Yahoo Finance via yfinance.
+    Falls back to a curated list if the call fails.
+    """
+    try:
+        screener = yf.screen("most_actives", size=limit)
+        quotes = screener.get("quotes", [])
+        tickers = [q.get("symbol", "") for q in quotes if q.get("symbol")]
+        if tickers:
+            return [t.upper() for t in tickers[:limit]]
+    except Exception as e:
+        print(f"[Trending] yfinance screen failed: {e}")
+
+    return FALLBACK_TICKERS[:limit]
+
+# ── Existing loader code (unchanged) ──────────────────────────────────────
 
 def load_data(ticker: str) -> dict:
     try:
@@ -17,7 +41,6 @@ def load_data(ticker: str) -> dict:
 
         raw = response.json()
 
-        # build time series from flagged items for the chart
         time_series = []
         for item in raw.get("flagged_items", []):
             ts = item.get("timestamp", "")
@@ -35,7 +58,6 @@ def load_data(ticker: str) -> dict:
 
         time_series.sort(key=lambda x: x["time"])
 
-        # news feed from flagged items
         news = [
             {
                 "title": item.get("text", ""),
@@ -61,7 +83,6 @@ def load_data(ticker: str) -> dict:
             "news": news,
             "item_count": raw.get("item_count", 0),
 
-            # prediction
             "current_price": prediction.get("current_price", "?"),
             "predicted_tomorrow": prediction.get("predicted_tomorrow", "?"),
             "predicted_tomorrow_date": prediction.get("predicted_tomorrow_date", ""),
@@ -70,20 +91,17 @@ def load_data(ticker: str) -> dict:
             "price_lower": prediction.get("confidence_interval_tomorrow", {}).get("lower", "?"),
             "price_upper": prediction.get("confidence_interval_tomorrow", {}).get("upper", "?"),
 
-            # combined signal
             "verdict": combined.get("verdict", "HOLD"),
             "confidence": combined.get("confidence", "low"),
             "sentiment_aligned": combined.get("sentiment_aligned", False),
             "price_aligned": combined.get("price_aligned", False),
 
-            # brief
             "llm_brief": brief.get("summary", "No summary available"),
             "why_it_matters": brief.get("why_it_matters", ""),
             "what_this_means": brief.get("what_this_means", ""),
             "brief_confidence": brief.get("confidence", ""),
             "sources_used": brief.get("sources_used", []),
 
-            # signal
             "signal": combined.get("verdict", "HOLD"),
         }
 

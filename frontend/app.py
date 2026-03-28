@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import time
-from loader import load_data, get_watchlist, add_ticker, remove_ticker
+from loader import load_data, get_watchlist, add_ticker, remove_ticker, get_trending_tickers
 
 st.set_page_config(page_title="PulseAI", layout="wide", page_icon="📡")
 
@@ -11,31 +11,35 @@ st.sidebar.title("📡 PulseAI")
 st.sidebar.markdown("*Autonomous market intelligence*")
 st.sidebar.markdown("---")
 
-# Watchlist management
-watchlist = get_watchlist()
-st.sidebar.subheader("Your Watchlist")
-selected_ticker = st.sidebar.selectbox("Select stock", watchlist)
+# Load trending tickers once per session (cached for 5 minutes)
+@st.cache_data(ttl=300)
+def cached_trending():
+    return get_trending_tickers(limit=10)
 
+trending = cached_trending()
+
+st.sidebar.subheader("🔥 Trending Stocks")
+st.sidebar.caption("Top 10 most active on Yahoo Finance — refreshes every 5 min")
+
+selected_ticker = st.sidebar.selectbox(
+    "Select a stock to monitor",
+    options=trending,
+    format_func=lambda t: f"{t}"
+)
+
+# Optional: still allow manual ticker entry
 st.sidebar.markdown("---")
-st.sidebar.subheader("Manage Watchlist")
-new_ticker = st.sidebar.text_input("Add ticker (max 3)").upper()
-col1, col2 = st.sidebar.columns(2)
-if col1.button("Add"):
-    if new_ticker:
-        result = add_ticker(new_ticker)
-        if "error" in result:
-            st.sidebar.error(result["error"])
-        else:
-            st.sidebar.success(f"{new_ticker} added")
-            st.rerun()
-
-remove_ticker_input = st.sidebar.selectbox("Remove", watchlist)
-if col2.button("Remove"):
-    remove_ticker(remove_ticker_input)
-    st.rerun()
+st.sidebar.subheader("Or enter any ticker")
+manual_ticker = st.sidebar.text_input("Custom ticker", placeholder="e.g. INFY, RELIANCE.NS").upper().strip()
+if manual_ticker:
+    selected_ticker = manual_ticker
+    st.sidebar.success(f"Monitoring: {manual_ticker}")
 
 st.sidebar.markdown("---")
 auto_refresh = st.sidebar.checkbox("Auto refresh (60s)", value=True)
+
+# Show which ticker is being monitored
+st.sidebar.info(f"**Now watching:** {selected_ticker}")
 
 # ── Load data ─────────────────────────────────────────────────────────────
 with st.spinner(f"Fetching latest signal for {selected_ticker}..."):
@@ -95,7 +99,6 @@ st.markdown("---")
 left, right = st.columns([2, 1])
 
 with left:
-    # Sentiment chart
     st.subheader("📈 Flagged Sentiment Scores")
     if data["time_series"]:
         df = pd.DataFrame(data["time_series"])
@@ -122,7 +125,6 @@ with left:
     else:
         st.info("No anomalies detected this cycle — market is quiet.")
 
-    # News feed
     st.subheader("📰 Flagged Headlines")
     if data["news"]:
         for item in data["news"]:
@@ -142,13 +144,11 @@ with left:
         st.info("No flagged headlines this cycle.")
 
 with right:
-    # Anomaly alert
     if data["anomaly"]:
         st.error(f"🚨 Anomaly Detected — {data['signal_type'].replace('_', ' ').title()}")
     else:
         st.success("✅ No anomaly detected")
 
-    # LLM Brief
     st.subheader("🤖 AI Brief")
     if data["llm_brief"]:
         st.markdown(f"**Summary**  \n{data['llm_brief']}")
@@ -161,9 +161,9 @@ with right:
     else:
         st.info("No brief generated — no anomaly detected.")
 
-    # System status
     st.subheader("⚙️ System")
-    st.markdown(f"**Watchlist:** {', '.join(watchlist)}")
+    st.markdown(f"**Monitoring:** {selected_ticker}")
+    st.markdown(f"**Trending tickers loaded:** {len(trending)}")
     st.markdown(f"**Poll interval:** 60s")
     st.markdown(f"**Sources active:** NewsAPI, Yahoo RSS, StockTwits, yfinance, SEC EDGAR")
 
@@ -171,4 +171,3 @@ with right:
 if auto_refresh:
     time.sleep(60)
     st.rerun()
-
