@@ -1,8 +1,8 @@
 import asyncio
-from sentiment.finbert import score_batch
-from anomaly.detector import detect
-from llm.groq_client import generate_brief
-from agent.loop import run_loop
+from ai.sentiment.finbert import score_batch
+from ai.anomaly.detector import detect
+from ai.llm.groq_client import generate_brief
+from ai.agent.loop import run_loop
 
 TICKER = "TSLA"
 

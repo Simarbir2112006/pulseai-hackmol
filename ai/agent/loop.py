@@ -1,16 +1,19 @@
 import asyncio
 import os
+import json
 from datetime import datetime
-from anomaly.detector import detect, AnomalyResult
-from sentiment.finbert import score_batch
-from llm.groq_client import generate_brief
+from ai.anomaly.detector import detect, AnomalyResult
+from ai.sentiment.finbert import score_batch
+from ai.llm.groq_client import generate_brief
 
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", 60))  # seconds
 
 
 async def _fetch_data(ticker: str) -> list[str]:
-    from data.fetcher import fetch_all
-    return await fetch_all(ticker)
+    path = os.path.join(os.path.dirname(_file_), "../../data/TSLA_pipeline_output.json")
+    with open(path) as f:
+        items = json.load(f)
+    return [item["text"] for item in items]
 
 
 def _run_analysis(ticker: str, texts: list[str]) -> tuple[AnomalyResult, dict]:
