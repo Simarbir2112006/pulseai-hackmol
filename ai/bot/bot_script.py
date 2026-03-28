@@ -38,8 +38,7 @@ def send_telegram_alert(ticker, signal_type, score, price, pct_move, anomaly_cou
         anomaly_count — how many anomalies detected in this session
         headline      — optional: the actual news text that triggered it
     """
-
-    # Emoji and label based on signal direction
+ # Emoji and label based on signal direction
     if signal_type == "negative":
         emoji     = "🔴"
         direction = "SELL SIGNAL"
