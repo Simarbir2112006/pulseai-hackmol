@@ -116,3 +116,32 @@ async def remove_from_watchlist(request: Request, ticker: str = Query(...)):
 async def live_price(ticker: str = Query(default="TSLA")):
     from data.fetcher import get_live_price
     return get_live_price(ticker.upper())
+
+@router.post("/test-alert")
+async def test_alert(request: Request, ticker: str = Query(default="TSLA")):
+    """Force a Telegram alert for demo purposes."""
+    from ai.notifications.telegram_bot import send_telegram_alert
+    from data.fetcher import get_live_price
+    
+    ticker = ticker.upper()
+    latest = getattr(request.app.state, "latest_signals", {})
+    signal = latest.get(ticker, {})
+    
+    prediction = signal.get("prediction", {})
+    brief = signal.get("brief", {})
+    
+    live = get_live_price(ticker)
+    
+    success = send_telegram_alert(
+        ticker        = ticker,
+        signal_type   = "positive" if signal.get("signal_type") == "positive_spike" else "negative",
+        score         = signal.get("avg_sentiment", 0.87),
+        price         = live.get("price") or prediction.get("current_price", 0),
+        pct_move      = prediction.get("pct_change_tomorrow", 4.2),
+        anomaly_count = len(signal.get("flagged_items", [])) or 7,
+        headline      = brief.get("headline", "") or
+                        (signal.get("flagged_items", [{}])[0].get("text", "Anomaly detected")
+                         if signal.get("flagged_items") else "Anomaly detected"),
+    )
+    
+    return {"sent": success, "ticker": ticker}

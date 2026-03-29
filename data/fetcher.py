@@ -75,6 +75,9 @@ def fetch_yahoo_rss(ticker: str) -> list[dict]:
         feed = feedparser.parse(url)
         results = []
         for entry in feed.entries[:15]:
+            # filter off-topic articles
+            if ticker.upper() not in entry.title.upper():
+                continue
             results.append({
                 "source": "yahoo_rss",
                 "text": entry.title,
@@ -114,7 +117,7 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
             else:
                 timestamp = str(pub_time) if pub_time else datetime.utcnow().isoformat()
 
-            if title:
+            if title and ticker.upper() in title.upper():
                 results.append({
                     "source": "yf_news",
                     "text": title,
