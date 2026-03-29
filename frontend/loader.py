@@ -1,7 +1,8 @@
 import requests
 from datetime import datetime
+import yfinance as yf
 
-API_URL = "http://localhost:8000"
+API_URL = "http://127.0.0.1:8000"
 
 
 def load_data(ticker: str) -> dict:
@@ -9,16 +10,17 @@ def load_data(ticker: str) -> dict:
         response = requests.get(
             f"{API_URL}/signals/latest",
             params={"ticker": ticker},
-            timeout=10
+            timeout=120
         )
         if response.status_code != 200:
             raise Exception(f"Bad response: {response.status_code}")
 
         raw = response.json()
+        prediction = raw.get("prediction", {})
+        combined = raw.get("combined_signal", {})
+        brief = raw.get("brief", {})
 
-        # -----------------------------
-        # Time series (for sentiment graph)
-        # -----------------------------
+        # time series for sentiment chart
         time_series = []
         for item in raw.get("flagged_items", []):
             ts = item.get("timestamp", "")
@@ -27,19 +29,15 @@ def load_data(ticker: str) -> dict:
                 time_str = parsed.strftime("%H:%M:%S")
             except Exception:
                 time_str = ts[-8:] if ts else "00:00:00"
-
             time_series.append({
                 "time": time_str,
                 "sentiment": round(float(item.get("score", 0)) * 100, 2),
                 "source": item.get("source", "unknown"),
                 "z_score": item.get("z_score", None),
             })
-
         time_series.sort(key=lambda x: x["time"])
 
-        # -----------------------------
-        # News mapping
-        # -----------------------------
+        # news feed
         news = [
             {
                 "title": item.get("text", ""),
@@ -51,75 +49,32 @@ def load_data(ticker: str) -> dict:
             for item in raw.get("flagged_items", [])
         ]
 
-        # -----------------------------
-        # FIXED: Prediction mapping
-        # -----------------------------
-        prediction = {
-            "current_price": raw.get("current_price", "?"),
-            "predicted_tomorrow": raw.get("predicted_tomorrow", "?"),
-            "predicted_tomorrow_date": raw.get("predicted_tomorrow_date", ""),
-            "pct_change_tomorrow": raw.get("pct_change_tomorrow", 0),
-            "direction": "unknown",
-            "confidence_interval_tomorrow": {
-                "lower": raw.get("price_lower", "?"),
-                "upper": raw.get("price_upper", "?")
-            }
-        }
-
-        # -----------------------------
-        # FIXED: Combined signal mapping
-        # -----------------------------
-        combined = {
-            "verdict": raw.get("brief", {}).get("signal", "HOLD"),
-            "confidence": "low",
-            "sentiment_aligned": False,
-            "price_aligned": False
-        }
-
-        brief = raw.get("brief", {})
-
-        # -----------------------------
-        # FINAL STRUCTURE (FRONTEND READY)
-        # -----------------------------
         return {
             "ticker": raw.get("ticker", ticker),
             "timestamp": raw.get("timestamp", ""),
-
-            # sentiment
             "sentiment": round(float(raw.get("avg_sentiment", 0)) * 100, 2),
             "time_series": time_series,
-
-            # anomaly
             "anomaly": bool(raw.get("detected", False)),
             "signal_type": raw.get("signal_type", "neutral"),
-
-            # news
             "news": news,
             "item_count": raw.get("item_count", 0),
-
-            # FIXED: Price fields (no more $?)
-            "current_price": prediction.get("current_price") or raw.get("current_price", "?"),
-            "predicted_tomorrow": prediction.get("predicted_tomorrow"),
-            "predicted_tomorrow_date": prediction.get("predicted_tomorrow_date"),
-            "pct_change_tomorrow": prediction.get("pct_change_tomorrow"),
-            "price_direction": prediction.get("direction"),
-            "price_lower": prediction["confidence_interval_tomorrow"]["lower"],
-            "price_upper": prediction["confidence_interval_tomorrow"]["upper"],
-
-            # signal
-            "verdict": combined.get("verdict"),
-            "confidence": combined.get("confidence"),
-            "sentiment_aligned": combined.get("sentiment_aligned"),
-            "price_aligned": combined.get("price_aligned"),
-
-            # LLM
-            "llm_brief": brief.get("summary", "No summary available"),
+            "current_price": prediction.get("current_price", "?"),
+            "predicted_tomorrow": prediction.get("predicted_tomorrow", "?"),
+            "predicted_tomorrow_date": prediction.get("predicted_tomorrow_date", ""),
+            "pct_change_tomorrow": prediction.get("pct_change_tomorrow", 0),
+            "price_direction": prediction.get("direction", "unknown"),
+            "price_lower": prediction.get("confidence_interval_tomorrow", {}).get("lower", "?"),
+            "price_upper": prediction.get("confidence_interval_tomorrow", {}).get("upper", "?"),
+            "verdict": combined.get("verdict", "HOLD"),
+            "confidence": combined.get("confidence", "low"),
+            "sentiment_aligned": combined.get("sentiment_aligned", False),
+            "price_aligned": combined.get("price_aligned", False),
+            "llm_brief": brief.get("summary", ""),
             "why_it_matters": brief.get("why_it_matters", ""),
             "what_this_means": brief.get("what_this_means", ""),
             "brief_confidence": brief.get("confidence", ""),
             "sources_used": brief.get("sources_used", []),
-
-            "signal": combined.get("verdict"),
+            "signal": combined.get("verdict", "HOLD"),
         }
 
     except Exception as e:
@@ -127,16 +82,11 @@ def load_data(ticker: str) -> dict:
         return _mock(ticker)
 
 
-# -----------------------------
-# Candlestick (no change needed)
-# -----------------------------
 def load_candle_data(ticker: str, period: str = "1mo", interval: str = "1d") -> dict:
     try:
-        import yfinance as yf
         hist = yf.Ticker(ticker).history(period=period, interval=interval)
         if hist.empty:
             return {}
-
         return {
             "dates":   hist.index.strftime("%Y-%m-%d %H:%M").tolist(),
             "opens":   [round(float(v), 2) for v in hist["Open"]],
@@ -145,20 +95,48 @@ def load_candle_data(ticker: str, period: str = "1mo", interval: str = "1d") -> 
             "closes":  [round(float(v), 2) for v in hist["Close"]],
             "volumes": [int(v) for v in hist["Volume"]],
         }
-
     except Exception as e:
         print(f"[Loader] Candle data error: {e}")
         return {}
 
 
-# -----------------------------
-# Fallback mock
-# -----------------------------
+def get_watchlist() -> list:
+    try:
+        r = requests.get(f"{API_URL}/signals/watchlist", timeout=5)
+        return r.json().get("watchlist", ["TSLA"])
+    except Exception:
+        return ["TSLA"]
+
+
+def add_ticker(ticker: str) -> dict:
+    try:
+        r = requests.post(
+            f"{API_URL}/signals/watchlist/add",
+            params={"ticker": ticker},
+            timeout=5
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def remove_ticker(ticker: str) -> dict:
+    try:
+        r = requests.post(
+            f"{API_URL}/signals/watchlist/remove",
+            params={"ticker": ticker},
+            timeout=5
+        )
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _mock(ticker: str) -> dict:
     return {
         "ticker": ticker,
         "timestamp": "",
-        "sentiment": 50.0,
+        "sentiment": 0.0,
         "time_series": [],
         "anomaly": False,
         "signal_type": "neutral",

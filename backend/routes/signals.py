@@ -10,9 +10,41 @@ async def latest_signal(request: Request, ticker: str = Query(default="TSLA")):
     ticker = ticker.upper()
     latest = getattr(request.app.state, "latest_signals", {})
     signal = latest.get(ticker)
+    
     if not signal:
-        from backend.services.ai_service import get_latest_signal
-        signal = await get_latest_signal(ticker)
+        # start watching this ticker in background
+        from ai.pipeline import start_background_loop
+        
+        async def push_signal(s: dict):
+            t = s.get("ticker", "UNKNOWN")
+            request.app.state.latest_signals[t] = s
+            request.app.state.signal_history.append(s)
+        
+        # only start if not already in watchlist
+        watchlist = getattr(request.app.state, "watchlist", [])
+        if ticker not in watchlist and len(watchlist) < 3:
+            watchlist.append(ticker)
+            request.app.state.watchlist = watchlist
+            asyncio.create_task(start_background_loop(ticker, on_signal=push_signal))
+        
+        return {
+            "ticker": ticker,
+            "detected": False,
+            "signal_type": "neutral",
+            "avg_sentiment": 0,
+            "item_count": 0,
+            "flagged_items": [],
+            "brief": {},
+            "prediction": {},
+            "combined_signal": {
+                "verdict": "LOADING",
+                "confidence": "—",
+                "sentiment_aligned": False,
+                "price_aligned": False,
+            },
+            "message": f"Starting analysis for {ticker}... refresh in 60 seconds."
+        }
+    
     return signal
 
 @router.get("/history")
