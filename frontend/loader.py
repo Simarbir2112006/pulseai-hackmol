@@ -1,6 +1,6 @@
 import requests
 from datetime import datetime
-import random
+import yfinance as yf
 
 API_URL = "http://127.0.0.1:8000"
 
@@ -16,8 +16,11 @@ def load_data(ticker: str) -> dict:
             raise Exception(f"Bad response: {response.status_code}")
 
         raw = response.json()
+        prediction = raw.get("prediction", {})
+        combined = raw.get("combined_signal", {})
+        brief = raw.get("brief", {})
 
-        # build time series from flagged items for the chart
+        # time series for sentiment chart
         time_series = []
         for item in raw.get("flagged_items", []):
             ts = item.get("timestamp", "")
@@ -32,10 +35,9 @@ def load_data(ticker: str) -> dict:
                 "source": item.get("source", "unknown"),
                 "z_score": item.get("z_score", None),
             })
-
         time_series.sort(key=lambda x: x["time"])
 
-        # news feed from flagged items
+        # news feed
         news = [
             {
                 "title": item.get("text", ""),
@@ -47,10 +49,6 @@ def load_data(ticker: str) -> dict:
             for item in raw.get("flagged_items", [])
         ]
 
-        prediction = raw.get("prediction", {})
-        combined = raw.get("combined_signal", {})
-        brief = raw.get("brief", {})
-
         return {
             "ticker": raw.get("ticker", ticker),
             "timestamp": raw.get("timestamp", ""),
@@ -60,8 +58,6 @@ def load_data(ticker: str) -> dict:
             "signal_type": raw.get("signal_type", "neutral"),
             "news": news,
             "item_count": raw.get("item_count", 0),
-
-            # prediction
             "current_price": prediction.get("current_price", "?"),
             "predicted_tomorrow": prediction.get("predicted_tomorrow", "?"),
             "predicted_tomorrow_date": prediction.get("predicted_tomorrow_date", ""),
@@ -69,27 +65,39 @@ def load_data(ticker: str) -> dict:
             "price_direction": prediction.get("direction", "unknown"),
             "price_lower": prediction.get("confidence_interval_tomorrow", {}).get("lower", "?"),
             "price_upper": prediction.get("confidence_interval_tomorrow", {}).get("upper", "?"),
-
-            # combined signal
             "verdict": combined.get("verdict", "HOLD"),
             "confidence": combined.get("confidence", "low"),
             "sentiment_aligned": combined.get("sentiment_aligned", False),
             "price_aligned": combined.get("price_aligned", False),
-
-            # brief
-            "llm_brief": brief.get("summary", "No summary available"),
+            "llm_brief": brief.get("summary", ""),
             "why_it_matters": brief.get("why_it_matters", ""),
             "what_this_means": brief.get("what_this_means", ""),
             "brief_confidence": brief.get("confidence", ""),
             "sources_used": brief.get("sources_used", []),
-
-            # signal
             "signal": combined.get("verdict", "HOLD"),
         }
 
     except Exception as e:
         print(f"[Loader] Error: {e}")
         return _mock(ticker)
+
+
+def load_candle_data(ticker: str, period: str = "1mo", interval: str = "1d") -> dict:
+    try:
+        hist = yf.Ticker(ticker).history(period=period, interval=interval)
+        if hist.empty:
+            return {}
+        return {
+            "dates":   hist.index.strftime("%Y-%m-%d %H:%M").tolist(),
+            "opens":   [round(float(v), 2) for v in hist["Open"]],
+            "highs":   [round(float(v), 2) for v in hist["High"]],
+            "lows":    [round(float(v), 2) for v in hist["Low"]],
+            "closes":  [round(float(v), 2) for v in hist["Close"]],
+            "volumes": [int(v) for v in hist["Volume"]],
+        }
+    except Exception as e:
+        print(f"[Loader] Candle data error: {e}")
+        return {}
 
 
 def get_watchlist() -> list:
@@ -125,11 +133,10 @@ def remove_ticker(ticker: str) -> dict:
 
 
 def _mock(ticker: str) -> dict:
-    """Fallback mock if backend is down."""
     return {
         "ticker": ticker,
         "timestamp": "",
-        "sentiment": 50.0,
+        "sentiment": 0.0,
         "time_series": [],
         "anomaly": False,
         "signal_type": "neutral",

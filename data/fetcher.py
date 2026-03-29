@@ -1,14 +1,34 @@
 import os
+import ssl
 import asyncio
 import requests
 import feedparser
 import yfinance as yf
+import urllib3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from newsapi import NewsApiClient
 from datetime import datetime, timezone, timedelta
 
 load_dotenv()
+
+# ── SSL Fix (corporate/college network with self-signed proxy cert) ─────────
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Patch all requests sessions to skip SSL verification
+_original_request = requests.Session.request
+def _no_ssl_request(self, *args, **kwargs):
+    kwargs.setdefault("verify", False)
+    return _original_request(self, *args, **kwargs)
+requests.Session.request = _no_ssl_request
+
+# Fix yfinance SSL (it uses curl under the hood on some systems)
+os.environ["CURL_CA_BUNDLE"] = ""
+os.environ["REQUESTS_CA_BUNDLE"] = ""
+
+# Fix feedparser SSL
+ssl._create_default_https_context = ssl._create_unverified_context
+# ───────────────────────────────────────────────────────────────────────────
 
 # ── API Keys ────────────────────────────────────────────────────────────────
 NEWSAPI_KEY  = os.getenv("NEWS_API_KEY", "")
@@ -69,36 +89,31 @@ def fetch_yahoo_rss(ticker: str) -> list[dict]:
         return []
 
 
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # SOURCE 4 — yfinance extras (analyst recs + recent news)
-# You already have yfinance — just pulling more from it
 # ════════════════════════════════════════════════════════════════════════════
 def fetch_yfinance_extras(ticker: str) -> list[dict]:
     results = []
     try:
         stock = yf.Ticker(ticker)
 
-        # 4a — Recent news from Yahoo (different endpoint than RSS)
         for article in (stock.news or [])[:10]:
-            # handle both old and new yfinance formats
             content = article.get("content", {})
             title = (
                 content.get("title")
                 or article.get("title", "")
             ).strip()
-            
+
             pub_time = (
                 content.get("pubDate")
                 or article.get("providerPublishTime")
             )
-            
+
             if isinstance(pub_time, (int, float)):
                 timestamp = datetime.utcfromtimestamp(pub_time).isoformat()
             else:
                 timestamp = str(pub_time) if pub_time else datetime.utcnow().isoformat()
-            
+
             if title:
                 results.append({
                     "source": "yf_news",
@@ -108,11 +123,9 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
                     "weight": 1.0,
                 })
 
-        # 4b — Analyst recommendation trend (upgrade/downgrade = strong signal)
         recs = stock.recommendations
         if recs is not None and not recs.empty:
             latest = recs.iloc[-1]
-            # Translate analyst consensus into a text signal
             total_buy  = int(latest["strongBuy"] if "strongBuy" in latest.index else 0) + int(latest["buy"] if "buy" in latest.index else 0)
             total_sell = int(latest["strongSell"] if "strongSell" in latest.index else 0) + int(latest["sell"] if "sell" in latest.index else 0)
             total_hold = int(latest["hold"] if "hold" in latest.index else 0)
@@ -128,10 +141,9 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
                 "source": "yf_analyst",
                 "text": rec_text,
                 "timestamp": datetime.utcnow().isoformat(),
-                "weight": 1.5,   # analyst ratings carry more weight
+                "weight": 1.5,
             })
 
-        # 4c — Price momentum signal (5-day trend as text)
         hist = stock.history(period="5d")
         if not hist.empty:
             open_price  = hist["Close"].iloc[0]
@@ -159,18 +171,9 @@ def fetch_yfinance_extras(ticker: str) -> list[dict]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SOURCE 5 — Google Trends via pytrends (search interest = trend weight)
-# This doesn't produce sentiment text — it returns a score (0-100)
-# used later to AMPLIFY scores from other sources
+# SOURCE 5 — Google Trends via pytrends
 # ════════════════════════════════════════════════════════════════════════════
 def fetch_trend_score(ticker: str) -> float:
-    """
-    Returns a trend multiplier between 0.5 and 1.5.
-    High search interest (people Googling the stock) amplifies signals.
-    Low interest dampens them.
-    Used in fetch_all() to weight every other source's scores.
-    """
-    # Map ticker to human search term
     TERM_MAP = {
         "TSLA": "Tesla stock",
         "AAPL": "Apple stock",
@@ -191,7 +194,6 @@ def fetch_trend_score(ticker: str) -> float:
             return 1.0
 
         latest_score = int(data[term].iloc[-1])
-        # Normalize: 0–100 → 0.5–1.5 multiplier
         multiplier = round(0.5 + (latest_score / 100), 3)
         print(f"[Fetcher] pytrends: '{term}' interest={latest_score}/100 → weight={multiplier}x")
         return multiplier
@@ -206,8 +208,6 @@ def fetch_trend_score(ticker: str) -> float:
 
 # ════════════════════════════════════════════════════════════════════════════
 # SOURCE 6 — SEC EDGAR insider trades (Form 4 filings)
-# Free US government API — no key required
-# Insider buying = strong bullish signal / selling = bearish signal
 # ════════════════════════════════════════════════════════════════════════════
 def fetch_insider_trades(ticker: str) -> list[dict]:
     try:
@@ -232,8 +232,6 @@ def fetch_insider_trades(ticker: str) -> list[dict]:
             name = display_names[0] if display_names else "Unknown insider"
             filed_at = src.get("file_date", today.strftime("%Y-%m-%d"))
 
-            # Form 4 = insider transaction report
-            # We frame it as a text signal for FinBERT to score
             trade_text = (
                 f"{ticker} insider {name} filed a Form 4 transaction report "
                 f"on {filed_at} — insider activity detected"
@@ -242,7 +240,7 @@ def fetch_insider_trades(ticker: str) -> list[dict]:
                 "source": "sec_edgar",
                 "text": trade_text,
                 "timestamp": filed_at,
-                "weight": 1.8,   # insider trades are a very strong signal
+                "weight": 1.8,
             })
 
         print(f"[Fetcher] SEC EDGAR: {len(results)} insider filings")
@@ -255,7 +253,6 @@ def fetch_insider_trades(ticker: str) -> list[dict]:
 
 # ════════════════════════════════════════════════════════════════════════════
 # SOURCE 7 — Finnhub (analyst ratings + earnings surprises)
-# Free key at finnhub.io — 60 calls/min
 # ════════════════════════════════════════════════════════════════════════════
 def fetch_finnhub(ticker: str) -> list[dict]:
     if not FINNHUB_KEY:
@@ -267,7 +264,6 @@ def fetch_finnhub(ticker: str) -> list[dict]:
     headers = {"X-Finnhub-Token": FINNHUB_KEY}
 
     try:
-        # 7a — Analyst recommendation (strong/buy/hold/sell/strong sell)
         resp = requests.get(f"{base}/stock/recommendation", params={"symbol": ticker}, headers=headers, timeout=8)
         resp.raise_for_status()
         recs = resp.json()
@@ -290,7 +286,6 @@ def fetch_finnhub(ticker: str) -> list[dict]:
         print(f"[Fetcher] Finnhub analyst error: {e}")
 
     try:
-        # 7b — Earnings surprises (beat/miss = major price catalyst)
         resp = requests.get(f"{base}/stock/earnings", params={"symbol": ticker, "limit": 4}, headers=headers, timeout=8)
         resp.raise_for_status()
         earnings = resp.json()
@@ -310,7 +305,7 @@ def fetch_finnhub(ticker: str) -> list[dict]:
                     "source": "finnhub_earnings",
                     "text": surprise_text,
                     "timestamp": datetime.utcnow().isoformat(),
-                    "weight": 2.0,   # earnings surprises are the strongest signal
+                    "weight": 2.0,
                     "eps_surprise": round(diff, 4),
                 })
     except Exception as e:
@@ -337,25 +332,13 @@ def get_live_price(ticker: str) -> dict:
         print(f"[Fetcher] Live price error: {e}")
         return {"ticker": ticker, "price": None, "change": None, "change_pct": None}
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # MASTER FETCHER — fetch_all()
-# Called by ai/agent/loop.py → _fetch_data()
-# Returns weighted list of items sorted newest first
 # ════════════════════════════════════════════════════════════════════════════
 async def fetch_all(ticker: str) -> list[dict]:
-    """
-    Aggregates all sources and applies trend-based weight amplification.
-
-    The `weight` field on each item tells the anomaly detector and
-    scorer how much to trust this signal relative to others.
-
-    Trend multiplier from pytrends amplifies ALL weights when search
-    interest is high (people are already paying attention to this stock).
-    """
     print(f"\n[Fetcher] Starting full fetch for {ticker}...")
 
-    # Run all blocking fetches (they use requests, not async)
-    # Run them in an executor so we don't block the event loop
     loop = asyncio.get_running_loop()
 
     news_task        = loop.run_in_executor(None, fetch_news,            ticker)
@@ -380,18 +363,14 @@ async def fetch_all(ticker: str) -> list[dict]:
     all_data.extend(sec)
     all_data.extend(finnhub)
 
-    # Apply trend multiplier to every item's weight
-    # High search interest = amplify all signals
     if trend_multiplier != 1.0:
         print(f"[Fetcher] Applying trend multiplier {trend_multiplier}x to {len(all_data)} items")
         for item in all_data:
             item["weight"] = round(item.get("weight", 1.0) * trend_multiplier, 3)
 
-    # Attach the raw trend score for the API response
     for item in all_data:
         item["trend_multiplier"] = trend_multiplier
 
-    # Sort newest first
     def _ts(item):
         ts = item.get("timestamp", "")
         try:
@@ -401,7 +380,6 @@ async def fetch_all(ticker: str) -> list[dict]:
 
     all_data.sort(key=_ts, reverse=True)
 
-    # Summary log
     sources = {}
     for item in all_data:
         s = item.get("source", "unknown")
