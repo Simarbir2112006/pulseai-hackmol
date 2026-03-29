@@ -27,5 +27,15 @@ groq
 # Environment
 python-dotenv
 
-# Misc
+# Async
 httpx
+asyncio
+
+# Backtest / validation
+argparse
+
+# Telegram notifications
+# no extra package — uses requests
+
+# Dev
+cmdstanpy
